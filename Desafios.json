@@ -1,0 +1,1878 @@
+{
+  "name": "Desafios",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        192,
+        -80
+      ],
+      "id": "9490ebc9-20e2-4bc8-8eaf-6877019416ed",
+      "name": "Cron (30 min)",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "/* 1. TRAVA OS LEADS (Atomic Lock) */\nUPDATE leads \nSET \n    processing_lock = 1, \n    last_processed_at = NOW()\nWHERE \n    processing_lock = 0 \n    AND status IN ('AGENDADO', 'EM_CADENCIA', 'REAGENDADO', 'CANCELADO')\n    AND (next_action_at IS NULL OR next_action_at <= NOW())\nLIMIT 10;\n\n/* 2. SELECIONA OS LEADS TRAVADOS */\nSELECT \n    *, \n    DATEDIFF(data_reuniao, NOW()) as dias_restantes \nFROM leads \nWHERE \n    processing_lock = 1 \n    AND last_processed_at >= NOW() - INTERVAL 1 MINUTE;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        528,
+        -80
+      ],
+      "id": "d45ac543-47a6-46e5-bd0b-9ba9438da5e9",
+      "name": "MySQL: Select for Update (Lock)",
+      "credentials": {
+        "mySql": {
+          "id": "TsqSWhGQKjbiZDDr",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        816,
+        -80
+      ],
+      "id": "1acd0157-7524-4791-9d15-702da3a89c7c",
+      "name": "Iterador Leads"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4627b621-a70e-4efe-b80f-716e1b20a5c8",
+              "leftValue": "={{ new Date().getHours() }}",
+              "rightValue": 9,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "id": "c7d03c8e-cf0e-4f0c-a733-a2317c4ebc11",
+              "leftValue": "={{ new Date().getHours() }}",
+              "rightValue": 20,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1152,
+        -64
+      ],
+      "id": "d1a4ed2a-dc8f-45b3-a59c-18e1f0de0dd2",
+      "name": "Hora entre 09h e 20h?"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const lead = $input.item.json;\nconst status = lead.status;\nconst dias = lead.dias_restantes;\nconst dataReuniao = new Date(lead.data_reuniao);\nconst now = new Date();\n\n// 1. Caso Expirado \nif (dataReuniao < now && status !== 'CONCLUIDO') {\n  return { json: { action: 'marcar_expirado' } };\n}\n\n// 2. Caso Cancelado\nif (status === 'CANCELADO' || status === 'NO_SHOW') {\n  return { json: { action: 'stop_cancel' } };\n}\n\n// 3. Caso Reagendado\nif (status === 'REAGENDADO') {\n  return { json: { action: 'reset_schedule', new_date: dataReuniao } };\n}\n\n// 4. Fluxo Normal\nif (dias <= 0) return { json: { action: 'send_msg', template_days: 0 } };\nif (dias <= 2) return { json: { action: 'send_msg', template_days: 2 } };\nif (dias <= 7) return { json: { action: 'send_msg', template_days: 7 } };\n\nreturn { json: { action: 'skip' } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        -160
+      ],
+      "id": "1d85b41d-acce-4b24-9599-fa473dbc00c0",
+      "name": "Checar Status"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads \nSET \n    processing_lock = 0, \n    next_action_at = CASE \n        -- Se for de manhã (antes das 9h), agenda para HOJE às 09h\n        WHEN HOUR(NOW()) < 9 THEN DATE_ADD(CURDATE(), INTERVAL 9 HOUR)\n        -- Se for de noite (depois das 20h), agenda para AMANHÃ às 09h\n        ELSE DATE_ADD(CURDATE(), INTERVAL 1 DAY) + INTERVAL 9 HOUR\n    END\nWHERE id = {{ $json.id }} ;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        1584,
+        144
+      ],
+      "id": "c5ce472e-1131-43e2-8146-bfa385081f78",
+      "name": "Fora do horario",
+      "credentials": {
+        "mySql": {
+          "id": "TsqSWhGQKjbiZDDr",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "01a7cdc4-2d4d-4560-b74e-5de084cd6290",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "stop_cancel",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "d839179a-353f-482f-80ff-265001593dbc",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "reset_schedule",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "f0d83b87-d5e7-468a-8b65-013cfe44c57a",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "send_msg",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "0e8f4f26-d186-4851-802f-160cfeec94c1",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "marcar_expirado",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "0a5c5acc-f72b-45c0-8aab-354eb0da7cff",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "skip",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1808,
+        -160
+      ],
+      "id": "f543283c-7a73-4a4a-9b0c-3c9ea067bf38",
+      "name": "Roteador de Acoes"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads \nSET processing_lock = 0, next_action_at = NULL \nWHERE id = {{ $('Iterador Leads').item.json.id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        2048,
+        -624
+      ],
+      "id": "8b7ef080-d60d-4537-af92-db706bc6f432",
+      "name": "Cancelado",
+      "credentials": {
+        "mySql": {
+          "id": "TsqSWhGQKjbiZDDr",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads \nSET status = 'AGENDADO', processing_lock = 0, next_action_at = NOW() \nWHERE id = {{ $('Iterador Leads').item.json.id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        2176,
+        -400
+      ],
+      "id": "19c3c4c5-41ad-4a58-ae0a-8b3d18781577",
+      "name": "Reset Reagendamento",
+      "credentials": {
+        "mySql": {
+          "id": "TsqSWhGQKjbiZDDr",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM message_templates \nWHERE dias_para_reuniao = {{ $json.template_days }} \nAND tipo_lead = '{{ $('Iterador Leads').item.json.tipo_lead }}'\nAND patrimonio_faixa = '{{ $('Iterador Leads').item.json.patrimonio_faixa }}'\nLIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        2144,
+        -112
+      ],
+      "id": "42a292c3-659f-42a5-997d-86f014919d65",
+      "name": "Selecionar template SQL",
+      "credentials": {
+        "mySql": {
+          "id": "TsqSWhGQKjbiZDDr",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*) as enviados \nFROM message_history mh\nJOIN leads l ON mh.lead_id = l.id\nWHERE l.telefone = '{{ $('Iterador Leads').item.json.telefone }}' \nAND DATE(mh.sent_at) = CURDATE();",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        2480,
+        -112
+      ],
+      "id": "e012d6e5-8a35-43ca-b4fd-0ca516b277b4",
+      "name": "Check Ja enviou",
+      "credentials": {
+        "mySql": {
+          "id": "TsqSWhGQKjbiZDDr",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "18c6f927-fb1b-4b6a-8a44-9c10f8dc3d09",
+              "leftValue": "={{ $json.enviados }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2688,
+        -112
+      ],
+      "id": "421943eb-4602-4c77-8ad0-44bd7dd12562",
+      "name": "Validar envio"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET processing_lock = 0 WHERE id = {{ $('Iterador Leads').item.json.id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        3344,
+        -96
+      ],
+      "id": "3e1ac7cc-ae94-4f35-be05-10da70ea1b74",
+      "name": "Unlock (ja enviou)",
+      "credentials": {
+        "mySql": {
+          "id": "TsqSWhGQKjbiZDDr",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Você é um consultor financeiro sênior do Clube do Valor.\nSua tarefa é reescrever a mensagem base abaixo para torná-la mais natural e personalizada para o WhatsApp.\nMantenha o tom profissional, mas próximo.\n\nO nome do cliente é: {{ $('Iterador Leads').item.json.nome }}\nO perfil deste cliente é: {{ $('Iterador Leads').item.json.tipo_lead }}\n\nREGRA CRÍTICA DE OUTPUT:\n- Responda APENAS com o texto da mensagem reescrita.\n- NÃO escreva \"Claro\", \"Aqui está\", \"Segue a versão\" ou qualquer introdução.\n- NÃO coloque a mensagem entre aspas.\n- Se você escrever qualquer coisa além da mensagem, a automação vai quebrar.\nMensagem Base para reescrever:\n\"{{ $('Selecionar template SQL').item.json.mensagem_base }}\"",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        3024,
+        -336
+      ],
+      "id": "755058fe-6860-47e7-bc95-873fc7b6700d",
+      "name": "Gerar variacao",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        3024,
+        -160
+      ],
+      "id": "6fd9805d-89af-47c0-901b-db19d36b469b",
+      "name": "OpenAI Chat Model",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "openAiApi": {
+          "id": "tJ6hPBDMjDeDy6QO",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "/* 1. Salva no Histórico de Envios (Prova do Envio) */\nINSERT INTO message_history (lead_id, template_id, content_sent) \nVALUES (\n    {{ $('Iterador Leads').item.json.id }}, \n    {{ $('Selecionar template SQL').item.json.id }}, \n    '{{ $('Guardrail').item.json.finalMessage.replace(/'/g, \"''\") }}' \n);\n\n/* 2. Gera Log de Auditoria (Transição de Estado Explícita) */\nINSERT INTO audit_logs (lead_id, old_status, new_status, triggered_by) \nVALUES (\n    {{ $('Iterador Leads').item.json.id }}, \n    '{{ $('Iterador Leads').item.json.status }}', \n    'EM_CADENCIA', \n    'automacao_ia'\n);\n\n/* 3. Destrava, Atualiza Estado e Agenda Próxima Ação */\nUPDATE leads \nSET \n    status = 'EM_CADENCIA',\n    processing_lock = 0, \n    next_action_at = DATE_ADD(NOW(), INTERVAL 1 DAY) \nWHERE id = {{ $('Iterador Leads').item.json.id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        3936,
+        -336
+      ],
+      "id": "9688825e-87d2-4676-bdd2-cfd5ccfbf212",
+      "name": "Commit Final e Unlock",
+      "credentials": {
+        "mySql": {
+          "id": "TsqSWhGQKjbiZDDr",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "/* GUARDRAILS DE SEGURANÇA - CLUBE DO VALOR\n  Valida se a IA respeitou os limites do template aprovado.\n*/\n\nconst aiMessage = $input.first().json.output || \"\";\nconst templateOriginal = $('Selecionar template SQL').first().json.mensagem_base;\n\nlet validation = {\n  isValid: true,\n  finalMessage: aiMessage,\n  reason: \"Aprovado\"\n};\n\n// 1. Bloqueio de Promessas Falsas (Alucinação comum)\nconst termosProibidos = [\"garantimos\", \"lucro certo\", \"prometemos\", \"sem risco\"];\nfor (const termo of termosProibidos) {\n  if (aiMessage.toLowerCase().includes(termo)) {\n    validation.isValid = false;\n    validation.reason = \"Tentativa de promessa não autorizada.\";\n  }\n}\n\n// 2. Bloqueio de Metalinguagem (IA saindo do personagem)\nif (aiMessage.includes(\"Claro!\") || aiMessage.includes(\"Aqui está\") || aiMessage.includes(\"texto reescrito\")) {\n  validation.isValid = false;\n  validation.reason = \"IA incluiu introdução ou chat no output.\";\n}\n\n// 3. Fallback Seguro (Se a IA falhou, usa o template aprovado com o nome injetado)\nif (!validation.isValid) {\n  const nomeLead = $('Iterador Leads').first().json.nome;\n  validation.finalMessage = templateOriginal.replace('{nome}', nomeLead);\n}\n\nreturn { json: validation };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3616,
+        -336
+      ],
+      "id": "aa91f46b-a4c5-4e9c-b663-54b0623cc936",
+      "name": "Guardrail"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET status = 'EXPIRADO', processing_lock = 0, next_action_at = NULL \nWHERE id = {{ $('Iterador Leads').item.json.id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        2080,
+        224
+      ],
+      "id": "8fe6b5cd-0928-4e18-b05d-43721bae21b1",
+      "name": "Marcar Expirado",
+      "credentials": {
+        "mySql": {
+          "id": "TsqSWhGQKjbiZDDr",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads \nSET processing_lock = 0 \nWHERE id = {{ $('Iterador Leads').item.json.id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        2064,
+        512
+      ],
+      "id": "853a430a-865c-47e0-bc71-c29cc70b16b2",
+      "name": "Unlock Skip",
+      "credentials": {
+        "mySql": {
+          "id": "TsqSWhGQKjbiZDDr",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": " const items = $input.all();\n  const output = [];\n\n  for (const item of items) {\n    const channel = item.json.channel;\n\n    if (channel === 'telegram' && item.binary) {\n      const firstKey = Object.keys(item.binary)[0];\n      if (firstKey) item.binary.file = item.binary[firstKey];\n    }\n\n    if (channel === 'whatsapp') {\n      let base64String = null;\n      const rp = item.json.raw_payload;\n\n      if (rp?.body?.data?.message?.base64) base64String = rp.body.data.message.base64;\n      else if (rp?.body?.base64) base64String = rp.body.base64;\n      else {\n        const jsonString = JSON.stringify(item.json);\n        const match = jsonString.match(/\\\"base64\\\":\\\"([^\\\"]+)\\\"/);\n        if (match) base64String = match[1];\n      }\n\n      if (base64String) {\n        item.binary = item.binary || {};\n        item.binary.file = {\n          data: base64String,\n          mimeType: 'image/jpeg',\n          fileExtension: 'jpg',\n          fileName: 'whatsapp.jpg'\n        };\n      }\n    }\n\n    // Só passa adiante se tiver imagem\n    if (item.binary?.file) output.push(item);\n  }\n\n  return output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2640,
+        2912
+      ],
+      "id": "1ab017ae-4134-49f7-9598-4a2461421a45",
+      "name": "Normalize Binary"
+    },
+    {
+      "parameters": {
+        "jsCode": " const item = $input.item;\n  const dt = new Date().toISOString().replace(/[:.]/g, '-');\n  const ext = item.binary.file.fileExtension || 'bin';\n  const chat = item.json.chat_id || 'unknown';\n  const rand = Math.floor(Math.random() * 1e6);\n\n  item.json.storage_path = `C:/Users/augus/Documents/n8n_storage/${chat}_${dt}_${rand}.${ext}`;\n  return item;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2384,
+        2912
+      ],
+      "id": "301c26d3-4260-4aa7-8b65-d8dfb5f9dad8",
+      "name": "Build File Path"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": " INSERT INTO incoming_events\n  (event_id, chat_id, channel, received_at, mime_type, file_name, storage_path, raw_payload)\n  VALUES\n  (\n    UUID(),\n    '{{$json.chat_id}}',\n    '{{$json.channel}}',\n    STR_TO_DATE(REPLACE(REPLACE('{{$json.received_at}}','T',' '),'Z',''), '%Y-%m-%d %H:%i:%s.%f'),\n    '{{$binary.file.mimeType}}',\n    '{{$binary.file.fileName}}',\n    '{{$json.storage_path}}',\n    '{{ JSON.stringify($json.raw_payload).replace(/'/g, \"''\") }}'\n  );",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -1744,
+        2928
+      ],
+      "id": "7b586382-5d1f-490f-a7a1-6e2c0c3b57bc",
+      "name": "MySQL: Insert incoming_events",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": " const item = $input.item;\n  item.json.batch_key = `${item.json.channel}:${item.json.chat_id}`;\n  return item;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1936,
+        2928
+      ],
+      "id": "a4e922f7-e18f-4778-8b4d-a86c618efef9",
+      "name": "Batch Key"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "\n  INSERT INTO batch_items (id, batch_id, event_id)\n  SELECT UUID(),\n    '{{$node[\"MySQL – Get Batch ID\"].json.id}}',\n    event_id\n  FROM incoming_events\n  WHERE storage_path = '{{ $('Batch Key').item.json.storage_path }}'\n  ORDER BY received_at DESC\n  LIMIT 1;\n\n  UPDATE batches SET last_event_at = NOW()\n  WHERE id = '{{$node[\"MySQL – Get Batch ID\"].json.id}}';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -1264,
+        2912
+      ],
+      "id": "6f9e8f4f-d7c3-45e9-9e48-e3d21db3dd25",
+      "name": "MySQL: Link Event",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": " SELECT\n    CASE\n      WHEN last_event_at <= NOW() - INTERVAL 20 SECOND AND status = 'open' THEN 1\n      ELSE 0\n    END AS is_idle\n  FROM batches\n  WHERE id = '{{$node[\"MySQL – Get Batch ID\"].json.id}}'\n  LIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -816,
+        2912
+      ],
+      "id": "3555524b-ae5e-4928-bb48-5b9cd7016e1c",
+      "name": "MySQL: Check Batch Idle",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "idle",
+              "leftValue": "={{$json.is_idle}}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -608,
+        2912
+      ],
+      "id": "6cdce1a9-14c0-43cc-a580-703c953ebd85",
+      "name": "Idle?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE batches\n  SET status = 'processing'\n  WHERE id = '{{$node[\"MySQL – Get Batch ID\"].json.id}}'\n    AND status = 'open'\n    AND last_event_at <= NOW() - INTERVAL 20 SECOND;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -384,
+        2912
+      ],
+      "id": "00a9d49b-7e31-4936-a6c8-22e4af12e51e",
+      "name": "MySQL: Set Processing",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "  SELECT e.storage_path, e.mime_type, e.file_name, e.event_id\n  FROM batch_items bi\n  JOIN incoming_events e ON e.event_id = bi.event_id\n  WHERE bi.batch_id = '{{$node[\"MySQL – Get Batch ID\"].json.id}}';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        288,
+        2896
+      ],
+      "id": "766287fc-709b-4dcf-a9d3-f90839316033",
+      "name": "MySQL: List Files",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "filePath": "={{$json.storage_path}}"
+      },
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [
+        688,
+        2768
+      ],
+      "id": "15981af0-5175-4a3a-bac6-494bc8601a9c",
+      "name": "Read Binary File"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "is_image",
+                    "leftValue": "={{ $json.mime_type }}",
+                    "rightValue": "image/",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "is_pdf",
+                    "leftValue": "={{ $json.mime_type }}",
+                    "rightValue": "application/pdf",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        832,
+        2656
+      ],
+      "id": "2b77fbaa-b7af-4af9-a2e7-36fd0e7fa268",
+      "name": "Switch Mime"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "  INSERT INTO extractions_raw (id, batch_id, event_id, payload)\n  VALUES (\n    UUID(),\n    '{{$node[\"MySQL – Get Batch ID\"].json.id}}',\n    '{{ $(\"Switch Mime\").item.json.event_id }}',\n    JSON_OBJECT(\n      'raw',\n      '{{ $json.output || $json.text || JSON.stringify($json) }}'\n    )\n  );",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        2128,
+        2752
+      ],
+      "id": "12ace252-96d0-4178-b769-10188695d1a5",
+      "name": "MySQL: Save Extraction Raw",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": " SELECT payload\n  FROM extractions_raw\n  WHERE batch_id = '{{$node[\"MySQL – Get Batch ID\"].json.id}}';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        1376,
+        3072
+      ],
+      "id": "305e604d-6834-433f-85e9-b8c60f214e00",
+      "name": "MySQL: Load Batch Extractions",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": " const rows = $input.all().map(i => i.json);\n\n  const docs = rows.map(r => {\n    let p = r.payload ?? r;\n    if (typeof p === 'string') {\n      try { p = JSON.parse(p); } catch { p = { raw: p }; }\n    }\n    if (p && p.raw && typeof p.raw === 'string') {\n      try { p = JSON.parse(p.raw); } catch { p = { raw: p.raw }; }\n    }\n    return p;\n  });\n\n  const byAtivo = {};\n  const conflicts = [];\n\n  for (const d of docs) {\n    let positions = d.positions ?? d;\n    if (!Array.isArray(positions)) positions = [positions];\n\n    for (const pos of positions) {\n      if (!pos || !pos.ativo) continue;\n      const key = pos.ativo;\n      if (!byAtivo[key]) byAtivo[key] = [];\n      byAtivo[key].push(pos);\n    }\n  }\n\n  const reconciled = [];\n  for (const [ativo, rows] of Object.entries(byAtivo)) {\n    let base = rows[0];\n    for (const r of rows.slice(1)) {\n      const diff = Math.abs((r.quantidade - base.quantidade) / (base.quantidade || 1));\n      if (diff > 0.05) conflicts.push({ ativo, base, r });\n    }\n    reconciled.push(base);\n  }\n\n  return { json: { reconciled, conflicts } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2096,
+        3072
+      ],
+      "id": "10846cf6-dc43-4a7d-a5b2-1cb95a09efe3",
+      "name": "Reconcile"
+    },
+    {
+      "parameters": {
+        "jsCode": "  const item = $input.item.json;\n  let score = 100;\n\n  if (item.not_investment) score -= 80;\n  if (!item.reconciled || item.reconciled.length === 0) score -= 60;\n\n  const missingFields = (item.reconciled || []).filter(p =>\n    !p.ativo || !p.quantidade || !p.valor_investido\n  ).length;\n  if (missingFields > 0) score -= Math.min(30, missingFields * 5);\n\n  if ((item.conflicts || []).length) score -= 25;\n\n  item.score = Math.max(0, score);\n  item.route = score >= 85 ? \"auto\" : score >= 40 ? \"review\" : \"reject\";\n  return item;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2320,
+        3072
+      ],
+      "id": "27153bc7-81da-4b86-97fe-8b56a836cbd9",
+      "name": "Score"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "auto",
+              "leftValue": "={{ $('Score').item.json.route }}",
+              "rightValue": "auto",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2736,
+        3072
+      ],
+      "id": "96615ae2-ed30-412c-bf9c-3aa27effd80f",
+      "name": "Auto?"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook-whatsapp",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -3136,
+        2848
+      ],
+      "id": "84a269ab-44f6-4a6b-af5d-aa93658164fa",
+      "name": "Webhook WhatsApp1",
+      "webhookId": "c7baeebc-ccc2-4af4-9fa4-2ac626268b20"
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {
+          "download": true
+        }
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -3136,
+        2976
+      ],
+      "id": "b8a9bed2-e63e-46b5-bb7d-5b3ae76a2b48",
+      "name": "Telegram Trigger1",
+      "webhookId": "00680ad9-74b2-4d10-a541-b282c81391f7",
+      "credentials": {
+        "telegramApi": {
+          "id": "ZUnMvCMLp25qS7QN",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $input.item.json;\nconst isWhatsApp = input.body?.event || input.body?.instance || input.event;\nconst webhookType = isWhatsApp ? 'whatsapp' : 'telegram';\n\nlet output = {\n  channel: webhookType,\n  received_at: new Date().toISOString(),\n  batch_ready: false\n};\n\nif (webhookType === 'whatsapp') {\n  output.chat_id = input.body?.data?.key?.remoteJid || 'desconhecido';\n  output.raw_payload = input;\n} else {\n  output.chat_id = input.message?.chat?.id || 'desconhecido';\n  output.raw_payload = input;\n}\n\nreturn { json: output, binary: $input.item.binary };\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2880,
+        2912
+      ],
+      "id": "03303f5f-b4ab-42d2-ae3b-2038ed229e79",
+      "name": "Normalizar Payload1"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{$json.storage_path}}",
+        "dataPropertyName": "file",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        -2128,
+        2912
+      ],
+      "id": "b6922bf4-cc8e-40bd-8cb2-5716156000b7",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "  INSERT INTO batches (id, batch_key, status, created_at, last_event_at)\n  SELECT UUID(), '{{ $('Batch Key').item.json.batch_key }}', 'open', NOW(), NOW()\n  WHERE NOT EXISTS (\n    SELECT 1 FROM batches\n    WHERE batch_key = '{{ $('Batch Key').item.json.batch_key }}'\n      AND status = 'open'\n      AND last_event_at >= NOW() - INTERVAL 30 MINUTE\n  );",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -1568,
+        2928
+      ],
+      "id": "28906337-4367-4e07-b49c-dc2c907794d6",
+      "name": "MySQL – Create Batch",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "  SELECT id\n  FROM batches\n  WHERE batch_key = '{{ $('Batch Key').item.json.batch_key }}'\n    AND status = 'open'\n    AND last_event_at >= NOW() - INTERVAL 30 MINUTE\n  ORDER BY last_event_at DESC\n  LIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -1424,
+        2928
+      ],
+      "id": "ec332e53-abc4-4438-a088-a16fcb8aca0d",
+      "name": "MySQL – Get Batch ID",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "text": "O  que esta na imagem? Seja descritivo em relacao a titulos e numeros",
+        "inputType": "base64",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        1168,
+        2352
+      ],
+      "id": "05ebf846-d08d-46b5-ac44-d968d50bae61",
+      "name": "Analyze image",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 5,
+      "credentials": {
+        "openAiApi": {
+          "id": "tJ6hPBDMjDeDy6QO",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Se não for extrato de investimentos, responda: {\\\"not_investment\\\": true}\\n\\n\nCaso seja entregue o conteudo em um formato parecido com esse:{\"ativo\":\"\",\"tipo\":\"\",\"quantidade\":,\"valor_investido\":,\"moeda\":\"\",\"data_base\":\"\",\"instituicao\":\" Se nao der para preencher tudo bem porem se tiver pelo menos 1 informacao nao descarte\n  \"},\n\nTexto OCR: {{ $json['0'].content[0].text }}\n{{ $json.text }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1872,
+        2432
+      ],
+      "id": "73c76606-2ba0-4dab-9395-185d5bd5370b",
+      "name": "AI Agent",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        1744,
+        2640
+      ],
+      "id": "cc84640f-ff6c-439b-a37d-b20a235b2f6b",
+      "name": "OpenAI Chat Model2",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 5,
+      "credentials": {
+        "openAiApi": {
+          "id": "tJ6hPBDMjDeDy6QO",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": " INSERT INTO batch_results\n    (id, batch_id, score, route, reconciled_count, conflicts_count, payload, created_at)\n  VALUES (\n    UUID(),\n    '{{$node[\"MySQL – Get Batch ID\"].json.id}}',\n    {{$json.score}},\n    '{{$json.route}}',\n    {{ ($json.reconciled || []).length }},\n    {{ ($json.conflicts || []).length }},\n    '{{ JSON.stringify($json).replace(/'/g, \"''\") }}',\n    NOW()\n  );",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        2528,
+        3072
+      ],
+      "id": "0e04f8eb-956d-476d-ac1f-edba18082ba4",
+      "name": "Execute a SQL query",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        1216,
+        2512
+      ],
+      "id": "7dca8324-003c-4c8c-84dc-61abbf86d463",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        480,
+        2896
+      ],
+      "id": "1b430964-bb83-43dd-ab40-343135b15941",
+      "name": "Split Files"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": " SELECT status\n  FROM batches\n  WHERE id = '{{$node[\"MySQL – Get Batch ID\"].json.id}}';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -176,
+        2912
+      ],
+      "id": "c704fe6c-06ad-4e6c-a6f2-eaf6fc7d46fd",
+      "name": "check look",
+      "credentials": {
+        "mySql": {
+          "id": "xEuILEncHw13ToDE",
+          "name": "MySQL account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "98ef0076-691f-4f4a-96b2-f329de2e037c",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "=processing",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        32,
+        2912
+      ],
+      "id": "4c6a4c10-2814-4dba-9742-905d5d0e516d",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "content": " ## DESAFIO 3\n",
+        "height": 1664,
+        "width": 4192,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        48,
+        -944
+      ],
+      "typeVersion": 1,
+      "id": "9ac62ab0-b570-49e3-b827-bc40b24a843c",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## DESAFIO 1",
+        "height": 1248,
+        "width": 6902,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -3296,
+        2288
+      ],
+      "typeVersion": 1,
+      "id": "56a51b22-bb89-47a7-9802-875c3fa55d4e",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "fcebffb0-a807-47f7-ab26-fd6ecec4518b",
+              "leftValue": "={{ $json.payload.raw }}",
+              "rightValue": "{\"not_investment\": true}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1584,
+        3072
+      ],
+      "id": "438353cc-c5bf-4f8b-83f9-129599189705",
+      "name": "If not_investment\": true"
+    },
+    {
+      "parameters": {
+        "amount": 20,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        -1040,
+        2912
+      ],
+      "id": "842f2a56-0c86-473a-8d7a-9b8019712386",
+      "name": "Wait 20sec",
+      "webhookId": "b3030d3e-4abc-49d5-8689-40a18457bf7d"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Cron (30 min)": {
+      "main": [
+        [
+          {
+            "node": "MySQL: Select for Update (Lock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Iterador Leads": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Hora entre 09h e 20h?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: Select for Update (Lock)": {
+      "main": [
+        [
+          {
+            "node": "Iterador Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hora entre 09h e 20h?": {
+      "main": [
+        [
+          {
+            "node": "Checar Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fora do horario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fora do horario": {
+      "main": [
+        [
+          {
+            "node": "Iterador Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Checar Status": {
+      "main": [
+        [
+          {
+            "node": "Roteador de Acoes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Roteador de Acoes": {
+      "main": [
+        [
+          {
+            "node": "Cancelado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reset Reagendamento",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Selecionar template SQL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Marcar Expirado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unlock Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reset Reagendamento": {
+      "main": [
+        [
+          {
+            "node": "Iterador Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancelado": {
+      "main": [
+        [
+          {
+            "node": "Iterador Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Selecionar template SQL": {
+      "main": [
+        [
+          {
+            "node": "Check Ja enviou",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Ja enviou": {
+      "main": [
+        [
+          {
+            "node": "Validar envio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar envio": {
+      "main": [
+        [
+          {
+            "node": "Gerar variacao",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unlock (ja enviou)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unlock (ja enviou)": {
+      "main": [
+        [
+          {
+            "node": "Iterador Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Gerar variacao",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar variacao": {
+      "main": [
+        [
+          {
+            "node": "Guardrail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commit Final e Unlock": {
+      "main": [
+        [
+          {
+            "node": "Iterador Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardrail": {
+      "main": [
+        [
+          {
+            "node": "Commit Final e Unlock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar Expirado": {
+      "main": [
+        [
+          {
+            "node": "Iterador Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unlock Skip": {
+      "main": [
+        [
+          {
+            "node": "Iterador Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Binary": {
+      "main": [
+        [
+          {
+            "node": "Build File Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build File Path": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: Insert incoming_events": {
+      "main": [
+        [
+          {
+            "node": "MySQL – Create Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Key": {
+      "main": [
+        [
+          {
+            "node": "MySQL: Insert incoming_events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: Link Event": {
+      "main": [
+        [
+          {
+            "node": "Wait 20sec",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: Check Batch Idle": {
+      "main": [
+        [
+          {
+            "node": "Idle?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idle?": {
+      "main": [
+        [
+          {
+            "node": "MySQL: Set Processing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 20sec",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: Set Processing": {
+      "main": [
+        [
+          {
+            "node": "check look",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: List Files": {
+      "main": [
+        [
+          {
+            "node": "Split Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Binary File": {
+      "main": [
+        [
+          {
+            "node": "Switch Mime",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Mime": {
+      "main": [
+        [
+          {
+            "node": "Analyze image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: Save Extraction Raw": {
+      "main": [
+        [
+          {
+            "node": "Split Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: Load Batch Extractions": {
+      "main": [
+        [
+          {
+            "node": "If not_investment\": true",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reconcile": {
+      "main": [
+        [
+          {
+            "node": "Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook WhatsApp1": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Payload1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger1": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Payload1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Payload1": {
+      "main": [
+        [
+          {
+            "node": "Normalize Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Batch Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL – Create Batch": {
+      "main": [
+        [
+          {
+            "node": "MySQL – Get Batch ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL – Get Batch ID": {
+      "main": [
+        [
+          {
+            "node": "MySQL: Link Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze image": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "MySQL: Save Extraction Raw",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Auto?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Files": {
+      "main": [
+        [
+          {
+            "node": "MySQL: Load Batch Extractions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read Binary File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check look": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "MySQL: List Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If not_investment\": true": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Reconcile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 20sec": {
+      "main": [
+        [
+          {
+            "node": "MySQL: Check Batch Idle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "e32c9c6a-0c27-4bed-a2fa-1e18f64e3841",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a7b931b200ffe771c71ec4e2f59e338fe216a9d5e60853f289969f34bbc88d38"
+  },
+  "id": "2ADHh1ZhCv1GQqkX",
+  "tags": []
+}
